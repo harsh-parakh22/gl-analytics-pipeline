@@ -1,0 +1,6 @@
+account_id,transaction_type_id,category_id,short_date,transaction_description,transaction_amount,region
+3,6,,2024-01-05,online transfer from chk 0000,1500.0,North America
+3,9,,2024-01-10,interest payment,2.5,North America
+3,6,,2024-01-15,online transfer from chk 0000,800.0,North America
+3,3,,2024-01-20,deposit from employer,3000.0,North America
+3,6,,2024-01-25,online transfer from chk 0000,500.0,North America
