@@ -2,16 +2,26 @@
 -- GL Transactions — PostgreSQL Analytical Views
 -- =============================================================================
 -- All views target the gl_transactions schema.
--- Set search path before running, or qualify each object with the schema name.
+--
+-- Data filter note: transactions from 2022 are excluded across all views
+-- because that year contains only partial data (pipeline went live mid-year)
+-- and skews trend calculations. Update the _EXCLUDE_YEAR value below if
+-- your data coverage changes.
+--
+-- To apply: psql -U postgres -d gl_transactions -f views_creation_script.sql
 -- =============================================================================
 
 SET search_path TO gl_transactions;
 
+-- Change this year filter if your data coverage changes
+-- (currently excludes 2022 — partial year at pipeline launch)
+-- Replace every occurrence of "!= 2022" / "!= '2022'" below if updating.
+
 
 -- -----------------------------------------------------------------------------
 -- View: monthly_spend_summary
--- Shows total spent per month, percentage change from the prior month,
--- and a running yearly total — using only credit-card and debit purchases.
+-- Monthly purchase totals, % change vs prior month, and running yearly total.
+-- Only credit-card (type 1) and debit (type 2) purchases are included.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE VIEW monthly_spend_summary AS
 WITH cte AS (
@@ -24,8 +34,8 @@ WITH cte AS (
     JOIN transaction_type  AS t  USING (transaction_type_id)
     JOIN category          AS c  USING (category_id)
     JOIN date              AS d  USING (short_date)
-    WHERE t.transaction_type_id IN (1, 2)   -- purchases only
-      AND d.year != 2022
+    WHERE t.transaction_type_id IN (1, 2)   -- purchases only; excludes transfers, deposits, etc.
+      AND d.year != 2022                     -- exclude partial launch year
     GROUP BY d.month_name, d.month_number, d.year
 )
 SELECT
@@ -45,7 +55,7 @@ ORDER BY year, month_number;
 
 -- -----------------------------------------------------------------------------
 -- View: monthly_spend_category
--- Shows and ranks spending per category per month.
+-- Spending per category per month, ranked within each month.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE VIEW monthly_spend_category AS
 SELECT
@@ -63,7 +73,7 @@ JOIN category          AS c  USING (category_id)
 JOIN account           AS a  USING (account_id)
 JOIN transaction_type  AS t  USING (transaction_type_id)
 JOIN date              AS d  USING (short_date)
-WHERE t.transaction_type_id IN (1, 2)
+WHERE t.transaction_type_id IN (1, 2)   -- purchases only
   AND d.year != 2022
 GROUP BY d.month_number, d.month_name, d.year, c.category_description
 ORDER BY d.year, d.month_number, month_ranking;
@@ -72,7 +82,7 @@ ORDER BY d.year, d.month_number, month_ranking;
 -- -----------------------------------------------------------------------------
 -- View: daily_spend
 -- All purchase transactions with a running yearly spend total.
--- Uses a LEFT JOIN from the date table so days with no purchases appear as 0.
+-- LEFT JOIN from date ensures days with no purchases appear as 0 (not gaps).
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE VIEW daily_spend AS
 SELECT
@@ -90,7 +100,7 @@ SELECT
 FROM date AS d
 LEFT JOIN transaction_facts AS tf
        ON d.short_date = tf.short_date
-      AND tf.transaction_type_id IN (1, 2)
+      AND tf.transaction_type_id IN (1, 2)   -- purchases only on the fact side
 LEFT JOIN transaction_type  AS t  USING (transaction_type_id)
 LEFT JOIN category          AS c  USING (category_id)
 WHERE d.short_date <= CURRENT_DATE
@@ -100,10 +110,13 @@ ORDER BY d.short_date;
 
 -- -----------------------------------------------------------------------------
 -- View: daily_category_balance
--- Running spend per category at daily granularity (used by Power BI visuals).
+-- Running spend per category at daily granularity (source for Power BI visuals).
+-- Uses a date × category CROSS JOIN spine so every category appears on every day,
+-- even when there were no transactions (shown as 0).
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE VIEW daily_category_balance AS
 WITH date_category AS (
+    -- Build a complete date × category grid so the visual has no gaps
     SELECT
         d.short_date,
         c.category_id
@@ -122,7 +135,7 @@ LEFT JOIN transaction_facts AS tf
       AND dc.category_id = tf.category_id
 LEFT JOIN transaction_type  AS t
        ON tf.transaction_type_id = t.transaction_type_id
-      AND t.transaction_type_id IN (1, 2)
+      AND t.transaction_type_id IN (1, 2)   -- purchases only
 WHERE EXTRACT(YEAR FROM dc.short_date) != 2022
   AND dc.short_date <= CURRENT_DATE
 GROUP BY dc.short_date, dc.category_id
@@ -131,7 +144,9 @@ ORDER BY dc.short_date, dc.category_id;
 
 -- -----------------------------------------------------------------------------
 -- View: monthly_account_balances
--- End-of-month running balance per account (useful for the account KPI cards).
+-- End-of-month running balance per account.
+-- Includes ALL transaction types (deposits, withdrawals, transfers, payments)
+-- because the balance reflects total money movement, not just purchases.
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE VIEW monthly_account_balances AS
 SELECT
@@ -147,3 +162,35 @@ JOIN account AS a USING (account_id)
 JOIN date    AS d USING (short_date)
 GROUP BY end_date_period, tf.account_id, a.account_type
 ORDER BY end_date_period;
+
+
+-- -----------------------------------------------------------------------------
+-- View: monthly_savings_rate
+-- Net savings rate per month: (total inflows - total outflows) / total inflows.
+-- Answers: "What percentage of income did I save each month?"
+-- Positive = saved money; negative = spent more than earned.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE VIEW monthly_savings_rate AS
+SELECT
+    d.year,
+    d.month_number,
+    d.month_name,
+    SUM(CASE WHEN tf.transaction_amount > 0 THEN tf.transaction_amount ELSE 0 END)
+        AS total_inflows,
+    SUM(CASE WHEN tf.transaction_amount < 0 THEN ABS(tf.transaction_amount) ELSE 0 END)
+        AS total_outflows,
+    SUM(tf.transaction_amount)
+        AS net_cashflow,
+    ROUND(
+        SUM(tf.transaction_amount)
+        / NULLIF(
+            SUM(CASE WHEN tf.transaction_amount > 0 THEN tf.transaction_amount ELSE 0 END),
+            0
+          ),
+        4
+    ) AS savings_rate
+FROM transaction_facts AS tf
+JOIN date AS d USING (short_date)
+WHERE d.year != 2022
+GROUP BY d.year, d.month_number, d.month_name
+ORDER BY d.year, d.month_number;

@@ -6,8 +6,11 @@
 --
 -- Run order:
 --   1. Execute this script to create all tables and constraints.
---   2. Load dimension seed data from database_creation/dimensions_data/.
---   3. Run transactions_processing notebooks to populate transaction_facts.
+--   2. Load dimension seed data from database_creation/dimensions_data/
+--      (use psql \copy or pgAdmin import).
+--   3. Run the sequence reset block at the bottom of this file AFTER loading
+--      seed data, to prevent auto-increment conflicts.
+--   4. Run transactions_processing notebooks to populate transaction_facts.
 -- =============================================================================
 
 
@@ -34,8 +37,8 @@ CREATE TABLE IF NOT EXISTS account (
 -- Dimension: transaction_type
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS transaction_type (
-    transaction_type_id         INT             NOT NULL,
-    transaction_type_description VARCHAR(70)    NOT NULL,
+    transaction_type_id          INT             NOT NULL,
+    transaction_type_description VARCHAR(70)     NOT NULL,
     PRIMARY KEY (transaction_type_id),
     UNIQUE (transaction_type_description)
 );
@@ -43,6 +46,11 @@ CREATE TABLE IF NOT EXISTS transaction_type (
 
 -- -----------------------------------------------------------------------------
 -- Dimension: category
+--
+-- NOTE: category_id uses SERIAL (auto-increment) but seed data contains
+-- explicit IDs with intentional gaps (5 and 13 are unused).
+-- After loading seed data, run the sequence reset block below to prevent
+-- future auto-incremented IDs from colliding with existing seed values.
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS category (
     category_id          SERIAL          NOT NULL,
@@ -108,3 +116,15 @@ ALTER TABLE transaction_facts
         OR
         (transaction_type_id NOT IN (1, 2))
     );
+
+
+-- =============================================================================
+-- STEP 3: Run this block AFTER loading seed data into the category table.
+-- It resets the SERIAL sequence so new auto-generated IDs do not collide
+-- with the explicit IDs already loaded from category.csv.
+-- =============================================================================
+-- SELECT setval(
+--     pg_get_serial_sequence('gl_transactions.category', 'category_id'),
+--     (SELECT MAX(category_id) FROM gl_transactions.category)
+-- );
+-- =============================================================================
