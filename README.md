@@ -1,4 +1,4 @@
-# GL Analytics Pipeline
+# Financial Transaction Analytics Pipeline & BI Dashboard.
 
 An end-to-end ETL pipeline and Power BI dashboard for analyzing 
 North America General Ledger transactions.
